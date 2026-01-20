@@ -1,0 +1,385 @@
+@page "/"
+@using System.Numerics
+@using SolarMicronet.Web.Models
+@using SolarMicronet.Web.Services
+@inject IMicrogridReadService MicrogridService
+@inject ISmartMeterApiClient SmartMeterApi
+@inject IJSRuntime JS
+@inject ILogger<Home> Logger
+@implements IAsyncDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Dashboard - SolarMicronet</PageTitle>
+
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-speedometer2 text-primary"></i> Dashboard
+        </h1>
+    </div>
+</div>
+
+<!-- Sección de Conexión -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="bi bi-wallet2"></i> Conexión de Wallet
+                </h5>
+                
+                @if (!isConnected)
+                {
+                    <button class="btn btn-primary" @onclick="ConnectWallet" disabled="@isConnecting">
+                        @if (isConnecting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        Conectar MetaMask
+                    </button>
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="alert alert-danger mt-3 mb-0" role="alert">
+                            <i class="bi bi-exclamation-triangle me-2"></i>@errorMessage
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="d-flex align-items-center">
+                                <i class="bi bi-check-circle-fill text-success fs-4 me-2"></i>
+                                <div>
+                                    <small class="text-muted d-block">Conectado</small>
+                                    <strong class="font-monospace">@FormatAddress(connectedAddress)</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div>
+                                <small class="text-muted d-block">Red</small>
+                                <strong>
+                                    @if (chainId == 1337)
+                                    {
+                                        <span class="badge bg-success">BLOCK-LAB (1337)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-warning text-dark">Red Incorrecta (@chainId)</span>
+                                    }
+                                </strong>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="RefreshDashboard" disabled="@isLoading">
+                                <i class="bi bi-arrow-clockwise"></i> Refrescar
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (isConnected && dashboardState != null)
+{
+    <!-- Estado del Participante -->
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-person-badge"></i> Estado del Participante
+                    </h5>
+                    
+                    @if (dashboardState.ParticipantInfo?.IsRegistered == true)
+                    {
+                        <div class="mb-3">
+                            <span class="badge bg-success mb-2">Registrado</span>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>Tipo:</span>
+                                <strong class="badge @(dashboardState.ParticipantInfo.Type == ParticipantType.Prosumer ? "bg-primary" : "bg-info")">
+                                    @dashboardState.ParticipantInfo.Type
+                                </strong>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle"></i> No estás registrado en el sistema. Contacta al administrador.
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-coin"></i> Balance de Energon
+                    </h5>
+                    <div class="display-4 text-primary mb-2">
+                        @dashboardState.EnergonBalance ENRG
+                    </div>
+                    <small class="text-muted">
+                        ≈ @dashboardState.EnergonBalance kWh
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Smart Meter y Estadísticas -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">
+                        <i class="bi bi-graph-up"></i> Total Supply
+                    </h6>
+                    <h4 class="mb-0">@dashboardState.TotalSupply ENRG</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">
+                        <i class="bi bi-piggy-bank"></i> Fondo de Reserva
+                    </h6>
+                    <h4 class="mb-0">@dashboardState.FundBalance ENRG</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-subtitle mb-2 text-muted">
+                        <i class="bi bi-speedometer"></i> Smart Meter Nonce
+                    </h6>
+                    <h4 class="mb-0">@dashboardState.MeterNonce</h4>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Smart Meter Info -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-device-hdd"></i> Smart Meter
+                    </h5>
+                    <div class="row">
+                        <div class="col-md-8">
+                            <small class="text-muted d-block">Dirección</small>
+                            <code>@dashboardState.SmartMeterAddress</code>
+                        </div>
+                        <div class="col-md-4 text-end">
+                            @if (dashboardState.IsSmartMeterAuthorized)
+                            {
+                                <span class="badge bg-success">Autorizado</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger">No Autorizado</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Validadores -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="bi bi-shield-check"></i> Validadores Actuales (Top-3)
+                    </h5>
+                    <div class="row">
+                        @foreach (var validator in dashboardState.CurrentValidators.Where(v => !string.IsNullOrEmpty(v)))
+                        {
+                            <div class="col-md-4 mb-2">
+                                <div class="card bg-light">
+                                    <div class="card-body py-2">
+                                        <code>@FormatAddress(validator)</code>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        @if (!dashboardState.CurrentValidators.Any(v => !string.IsNullOrEmpty(v)))
+                        {
+                            <div class="col-12">
+                                <small class="text-muted">No hay validadores configurados</small>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+
+    private bool isConnected = false;
+    private bool isConnecting = false;
+    private bool isLoading = false;
+    private string connectedAddress = string.Empty;
+    private int chainId = 0;
+    private string errorMessage = string.Empty;
+    private DashboardState? dashboardState;
+    private DotNetObjectReference<Home>? dotNetHelper;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task ConnectWallet()
+    {
+        try
+        {
+            isConnecting = true;
+            errorMessage = string.Empty;
+            StateHasChanged();
+
+            var account = await JS.InvokeAsync<string>("Web3Utils.connectWallet", dotNetHelper);
+
+            if (!string.IsNullOrEmpty(account))
+            {
+                connectedAddress = account;
+                chainId = await JS.InvokeAsync<int>("Web3Utils.getChainId");
+                isConnected = true;
+                await LoadDashboardData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error connecting wallet");
+            errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isConnecting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshDashboard()
+    {
+        await LoadDashboardData();
+    }
+
+    private async Task LoadDashboardData()
+    {
+        try
+        {
+            isLoading = true;
+            StateHasChanged();
+
+            dashboardState = new DashboardState
+            {
+                ConnectedAddress = connectedAddress,
+                ChainId = chainId,
+                IsConnected = isConnected
+            };
+
+            // Cargar datos del participante
+            dashboardState.ParticipantInfo = await MicrogridService.GetParticipantInfoAsync(connectedAddress);
+            dashboardState.EnergonBalance = await MicrogridService.GetEnergonBalanceAsync(connectedAddress);
+
+            // Cargar datos generales
+            dashboardState.TotalSupply = await MicrogridService.GetTotalSupplyAsync();
+            dashboardState.FundBalance = await MicrogridService.GetFundBalanceAsync();
+            dashboardState.CurrentValidators = await MicrogridService.GetCurrentValidatorsAsync();
+
+
+
+            // Cargar datos del Smart Meter
+
+            //  dashboardState.SmartMeterAddress = await SmartMeterApi.GetMeterAddressAsync();
+
+            dashboardState.SmartMeterAddress = BlockchainConfig.SMART_METER_ADDRESS;
+            dashboardState.IsSmartMeterAuthorized = await MicrogridService.IsSmartMeterAuthorizedAsync(dashboardState.SmartMeterAddress);
+            dashboardState.MeterNonce = await MicrogridService.GetMeterNonceAsync(dashboardState.SmartMeterAddress);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading dashboard data");
+            errorMessage = $"Error cargando datos: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnWalletConnected(string address, int chain)
+    {
+        connectedAddress = address;
+        chainId = chain;
+        isConnected = true;
+        await LoadDashboardData();
+    }
+
+    [JSInvokable]
+    public Task OnWalletError(string error)
+    {
+        errorMessage = error;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnWalletDisconnected()
+    {
+        isConnected = false;
+        connectedAddress = string.Empty;
+        dashboardState = null;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task OnAccountChanged(string newAddress)
+    {
+        connectedAddress = newAddress;
+        await LoadDashboardData();
+    }
+
+    [JSInvokable]
+    public async Task OnChainChanged(int newChainId)
+    {
+        chainId = newChainId;
+        await LoadDashboardData();
+    }
+
+    private string FormatAddress(string address)
+    {
+        if (string.IsNullOrEmpty(address) || address.Length < 10)
+            return address;
+        
+        return $"{address[..6]}...{address[^4..]}";
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        dotNetHelper?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}
