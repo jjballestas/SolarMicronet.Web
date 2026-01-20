@@ -229,7 +229,6 @@
 }
 
 @code {
-
     private bool isConnected = false;
     private bool isConnecting = false;
     private bool isLoading = false;
@@ -257,7 +256,7 @@
             StateHasChanged();
 
             var account = await JS.InvokeAsync<string>("Web3Utils.connectWallet", dotNetHelper);
-
+            
             if (!string.IsNullOrEmpty(account))
             {
                 connectedAddress = account;
@@ -306,13 +305,8 @@
             dashboardState.FundBalance = await MicrogridService.GetFundBalanceAsync();
             dashboardState.CurrentValidators = await MicrogridService.GetCurrentValidatorsAsync();
 
-
-
             // Cargar datos del Smart Meter
-
-            //  dashboardState.SmartMeterAddress = await SmartMeterApi.GetMeterAddressAsync();
-
-            dashboardState.SmartMeterAddress = BlockchainConfig.SMART_METER_ADDRESS;
+            dashboardState.SmartMeterAddress = await SmartMeterApi.GetMeterAddressAsync();
             dashboardState.IsSmartMeterAuthorized = await MicrogridService.IsSmartMeterAuthorizedAsync(dashboardState.SmartMeterAddress);
             dashboardState.MeterNonce = await MicrogridService.GetMeterNonceAsync(dashboardState.SmartMeterAddress);
         }

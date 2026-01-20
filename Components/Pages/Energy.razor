@@ -1,28 +1,413 @@
 @page "/energy"
 @using System.Numerics
+@using SolarMicronet.Web.Models
+@using SolarMicronet.Web.Services
+@inject IMicrogridReadService MicrogridService
+@inject ISmartMeterApiClient SmartMeterApi
 @inject IJSRuntime JS
 @inject ILogger<Energy> Logger
+@implements IAsyncDisposable
 @rendermode InteractiveServer
 
 <PageTitle>Operaciones Energéticas - SolarMicronet</PageTitle>
 
-<h1><i class="bi bi-lightning-charge text-warning"></i> Operaciones Energéticas</h1>
-
-<div class="alert alert-info">
-    <h4>Página de Operaciones Energéticas</h4>
-    <p>Funcionalidad implementada:</p>
-    <ul>
-        <li>Generar Energía (Solo Prosumers)</li>
-        <li>Consumir Energía</li>
-        <li>Integración con SmartMeter API</li>
-        <li>Firma ECDSA + Nonce on-chain</li>
-    </ul>
-    <p class="mb-0"><strong>Nota:</strong> Conecta tu wallet en el Dashboard para usar esta funcionalidad.</p>
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="mb-3">
+            <i class="bi bi-lightning-charge text-warning"></i> Operaciones Energéticas
+        </h1>
+    </div>
 </div>
 
-@code {
-    protected override void OnInitialized()
+@if (!isWalletConnected)
+{
+    <div class="alert alert-warning">
+        <i class="bi bi-exclamation-triangle me-2"></i>
+        <strong>Wallet no conectada.</strong> Por favor, ve al <a href="/" class="alert-link">Dashboard</a> y conecta tu wallet para usar esta funcionalidad.
+    </div>
+}
+else if (!isRegistered)
+{
+    <div class="alert alert-danger">
+        <i class="bi bi-x-circle me-2"></i>
+        <strong>No estás registrado.</strong> Contacta al administrador para registrarte en el sistema.
+    </div>
+}
+else
+{
+    <!-- GENERAR ENERGÍA -->
+    @if (participantType == ParticipantType.Prosumer)
     {
-        Logger.LogInformation("Energy page initialized");
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card shadow-sm border-success">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-sun-fill me-2"></i>Generar Energía
+                            <span class="badge bg-light text-success ms-2">Solo Prosumers</span>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="form-label">Cantidad de Energía (kWh)</label>
+                                    <input type="number" class="form-control" @bind="generateAmount" 
+                                           placeholder="Ej: 100" min="1" disabled="@isGenerating" />
+                                    <small class="text-muted">1 kWh = 1 ENRG</small>
+                                </div>
+                                <button class="btn btn-success" @onclick="GenerateEnergy" disabled="@isGenerating">
+                                    @if (isGenerating)
+                                    {
+                                        <span class="spinner-border spinner-border-sm me-2"></span>
+                                    }
+                                    <i class="bi bi-lightning-charge-fill me-2"></i>Generar Energía
+                                </button>
+                            </div>
+                            
+                            @if (generateSignatureData != null)
+                            {
+                                <div class="col-md-6">
+                                    <div class="alert alert-info mb-2">
+                                        <strong><i class="bi bi-info-circle me-2"></i>Datos de Firma (SmartMeter API)</strong>
+                                    </div>
+                                    <table class="table table-sm table-bordered">
+                                        <tbody>
+                                            <tr>
+                                                <th>Nonce:</th>
+                                                <td><code>@generateSignatureData.Data.Nonce</code></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Firma:</th>
+                                                <td><code class="text-break">@FormatSignature(generateSignatureData.Data.Signature)</code></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Meter:</th>
+                                                <td><code>@FormatAddress(generateSignatureData.Data.MeterAddress)</code></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(generateTxHash))
+                        {
+                            <div class="alert alert-success mt-3">
+                                <strong><i class="bi bi-check-circle me-2"></i>Transacción Enviada</strong>
+                                <br />
+                                <small>Hash: <code>@generateTxHash</code></small>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(generateError))
+                        {
+                            <div class="alert alert-danger mt-3">
+                                <i class="bi bi-exclamation-triangle me-2"></i>@generateError
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            Como <strong>Consumer</strong>, no puedes generar energía. Solo puedes consumir y transferir.
+        </div>
+    }
+
+    <!-- CONSUMIR ENERGÍA -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-plug-fill me-2"></i>Consumir Energía
+                        <span class="badge bg-light text-primary ms-2">Todos los participantes</span>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Cantidad de Energía (kWh)</label>
+                                <input type="number" class="form-control" @bind="consumeAmount" 
+                                       placeholder="Ej: 50" min="1" disabled="@isConsuming" />
+                                <small class="text-muted">Se descontará de tu balance de ENRG</small>
+                            </div>
+                            <button class="btn btn-primary" @onclick="ConsumeEnergy" disabled="@isConsuming">
+                                @if (isConsuming)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                }
+                                <i class="bi bi-plug-fill me-2"></i>Consumir Energía
+                            </button>
+                        </div>
+                        
+                        @if (consumeSignatureData != null)
+                        {
+                            <div class="col-md-6">
+                                <div class="alert alert-info mb-2">
+                                    <strong><i class="bi bi-info-circle me-2"></i>Datos de Firma (SmartMeter API)</strong>
+                                </div>
+                                <table class="table table-sm table-bordered">
+                                    <tbody>
+                                        <tr>
+                                            <th>Nonce:</th>
+                                            <td><code>@consumeSignatureData.Data.Nonce</code></td>
+                                        </tr>
+                                        <tr>
+                                            <th>Firma:</th>
+                                            <td><code class="text-break">@FormatSignature(consumeSignatureData.Data.Signature)</code></td>
+                                        </tr>
+                                        <tr>
+                                            <th>Meter:</th>
+                                            <td><code>@FormatAddress(consumeSignatureData.Data.MeterAddress)</code></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(consumeTxHash))
+                    {
+                        <div class="alert alert-success mt-3">
+                            <strong><i class="bi bi-check-circle me-2"></i>Transacción Enviada</strong>
+                            <br />
+                            <small>Hash: <code>@consumeTxHash</code></small>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(consumeError))
+                    {
+                        <div class="alert alert-danger mt-3">
+                            <i class="bi bi-exclamation-triangle me-2"></i>@consumeError
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- INFO ADICIONAL -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card bg-light">
+                <div class="card-body">
+                    <h6><i class="bi bi-info-circle text-info me-2"></i>Información</h6>
+                    <ul class="mb-0 small">
+                        <li><strong>Generar Energía:</strong> Solo Prosumers. Recibes 99% en tokens ENRG, 1% va al Fondo de Reserva.</li>
+                        <li><strong>Consumir Energía:</strong> Reduce tu balance de ENRG. Los tokens se queman.</li>
+                        <li><strong>Firma ECDSA:</strong> Cada operación requiere una firma del SmartMeter con nonce único.</li>
+                        <li><strong>Nonce:</strong> Protección anti-replay. Se incrementa automáticamente después de cada operación.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool isWalletConnected = false;
+    private bool isRegistered = false;
+    private ParticipantType participantType = ParticipantType.Consumer;
+    private string connectedAddress = string.Empty;
+
+    // Generar
+    private int generateAmount = 0;
+    private bool isGenerating = false;
+    private SignatureApiResponse? generateSignatureData;
+    private string generateTxHash = string.Empty;
+    private string generateError = string.Empty;
+
+    // Consumir
+    private int consumeAmount = 0;
+    private bool isConsuming = false;
+    private SignatureApiResponse? consumeSignatureData;
+    private string consumeTxHash = string.Empty;
+    private string consumeError = string.Empty;
+
+    private DotNetObjectReference<Energy>? dotNetHelper;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadWalletStatus();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task LoadWalletStatus()
+    {
+        try
+        {
+            connectedAddress = await JS.InvokeAsync<string>("Web3Utils.getCurrentAccount");
+            
+            if (!string.IsNullOrEmpty(connectedAddress))
+            {
+                isWalletConnected = true;
+                var participantInfo = await MicrogridService.GetParticipantInfoAsync(connectedAddress);
+                isRegistered = participantInfo.IsRegistered;
+                participantType = participantInfo.Type;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not load wallet status");
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task GenerateEnergy()
+    {
+        if (generateAmount <= 0)
+        {
+            generateError = "La cantidad debe ser mayor a 0";
+            return;
+        }
+
+        try
+        {
+            isGenerating = true;
+            generateError = string.Empty;
+            generateTxHash = string.Empty;
+            StateHasChanged();
+
+            // 1. Obtener firma del SmartMeter API
+            Logger.LogInformation("Solicitando firma para generar {Amount} kWh", generateAmount);
+            generateSignatureData = await SmartMeterApi.GenerateSignatureAsync(connectedAddress, generateAmount.ToString());
+            
+            StateHasChanged(); // Mostrar datos de firma
+
+            if (!generateSignatureData.Success)
+            {
+                generateError = "Error obteniendo firma del SmartMeter";
+                return;
+            }
+
+            // 2. Llamar a MetaMask para ejecutar transacción
+            Logger.LogInformation("Enviando transacción a MetaMask...");
+            var txHash = await JS.InvokeAsync<string>(
+                "Web3Utils.generateEnergy",
+                connectedAddress,
+                generateAmount,
+                generateSignatureData.Data.Nonce,
+                generateSignatureData.Data.Signature,
+                generateSignatureData.Data.MeterAddress
+            );
+
+            generateTxHash = txHash;
+            Logger.LogInformation("Transacción enviada: {TxHash}", txHash);
+
+            // Esperar 2 segundos para que se mine
+            await Task.Delay(2000);
+
+            // Limpiar formulario
+            generateAmount = 0;
+            generateSignatureData = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error generando energía");
+            generateError = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ConsumeEnergy()
+    {
+        if (consumeAmount <= 0)
+        {
+            consumeError = "La cantidad debe ser mayor a 0";
+            return;
+        }
+
+        try
+        {
+            isConsuming = true;
+            consumeError = string.Empty;
+            consumeTxHash = string.Empty;
+            StateHasChanged();
+
+            // 1. Obtener firma del SmartMeter API
+            Logger.LogInformation("Solicitando firma para consumir {Amount} kWh", consumeAmount);
+            consumeSignatureData = await SmartMeterApi.ConsumeSignatureAsync(connectedAddress, consumeAmount.ToString());
+            
+            StateHasChanged(); // Mostrar datos de firma
+
+            if (!consumeSignatureData.Success)
+            {
+                consumeError = "Error obteniendo firma del SmartMeter";
+                return;
+            }
+
+            // 2. Llamar a MetaMask para ejecutar transacción
+            Logger.LogInformation("Enviando transacción a MetaMask...");
+            var txHash = await JS.InvokeAsync<string>(
+                "Web3Utils.consumeEnergy",
+                connectedAddress,
+                consumeAmount,
+                consumeSignatureData.Data.Nonce,
+                consumeSignatureData.Data.Signature,
+                consumeSignatureData.Data.MeterAddress
+            );
+
+            consumeTxHash = txHash;
+            Logger.LogInformation("Transacción enviada: {TxHash}", txHash);
+
+            // Esperar 2 segundos para que se mine
+            await Task.Delay(2000);
+
+            // Limpiar formulario
+            consumeAmount = 0;
+            consumeSignatureData = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error consumiendo energía");
+            consumeError = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isConsuming = false;
+            StateHasChanged();
+        }
+    }
+
+    private string FormatAddress(string address)
+    {
+        if (string.IsNullOrEmpty(address) || address.Length < 10)
+            return address;
+        
+        return $"{address[..6]}...{address[^4..]}";
+    }
+
+    private string FormatSignature(string signature)
+    {
+        if (string.IsNullOrEmpty(signature) || signature.Length < 20)
+            return signature;
+        
+        return $"{signature[..20]}...";
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        dotNetHelper?.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

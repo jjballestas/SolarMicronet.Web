@@ -15,7 +15,7 @@ public class BlockchainConfig
     public const string RPC_URL = "http://virtual.lab.inf.uva.es:60022";
 
     // SmartMeter API
-    public const string SMART_METER_API_BASE = "https://smartmeterapi.ingenas.com/api";
+    public const string SMART_METER_API_BASE = "https://smartmeterapi.ingenas.com";
 
     // Configuración de operaciones
     public const int COMMISSION_RATE = 1;  // 1%

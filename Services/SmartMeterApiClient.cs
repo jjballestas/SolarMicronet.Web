@@ -33,7 +33,7 @@ public class SmartMeterApiClient : ISmartMeterApiClient
             var json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.PostAsync("/signature/generate", content);
+            var response = await _httpClient.PostAsync("/api/signature/generate", content);
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();
@@ -67,7 +67,7 @@ public class SmartMeterApiClient : ISmartMeterApiClient
             var json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.PostAsync("/signature/consume", content);
+            var response = await _httpClient.PostAsync("/api/signature/consume", content);
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();
@@ -101,7 +101,7 @@ public class SmartMeterApiClient : ISmartMeterApiClient
             var json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.PostAsync("/signature/custom", content);
+            var response = await _httpClient.PostAsync("/api/signature/custom", content);
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();
@@ -128,7 +128,7 @@ public class SmartMeterApiClient : ISmartMeterApiClient
     {
         try
         {
-            var response = await _httpClient.GetAsync("/meter/address");
+            var response = await _httpClient.GetAsync("/api/meter/address");
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();

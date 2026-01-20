@@ -1,16 +1,397 @@
 @page "/transfer"
+@using System.Numerics
+@using SolarMicronet.Web.Models
+@using SolarMicronet.Web.Services
+@inject IMicrogridReadService MicrogridService
+@inject IJSRuntime JS
+@inject ILogger<Transfer> Logger
+@implements IAsyncDisposable
 @rendermode InteractiveServer
 
 <PageTitle>Transferencias - SolarMicronet</PageTitle>
 
-<h1><i class="bi bi-arrow-left-right text-primary"></i> Transferencias de Energon</h1>
-
-<div class="alert alert-info">
-    <h4>Página de Transferencias</h4>
-    <p>Funcionalidad implementada:</p>
-    <ul>
-        <li>Transferencias ERC-20 de Energon</li>
-        <li>Validación de balance</li>
-        <li>Validación de dirección</li>
-    </ul>
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="mb-3">
+            <i class="bi bi-arrow-left-right text-primary"></i> Transferencias de Energon
+        </h1>
+    </div>
 </div>
+
+@if (!isWalletConnected)
+{
+    <div class="alert alert-warning">
+        <i class="bi bi-exclamation-triangle me-2"></i>
+        <strong>Wallet no conectada.</strong> Por favor, ve al <a href="/" class="alert-link">Dashboard</a> y conecta tu wallet para usar esta funcionalidad.
+    </div>
+}
+else if (!isRegistered)
+{
+    <div class="alert alert-danger">
+        <i class="bi bi-x-circle me-2"></i>
+        <strong>No estás registrado.</strong> Contacta al administrador para registrarte en el sistema.
+    </div>
+}
+else
+{
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card shadow-sm border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-send-fill me-2"></i>Transferir ENRG
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-12">
+                            <!-- Balance Actual -->
+                            <div class="alert alert-info mb-4">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-wallet2 me-2"></i><strong>Tu Balance:</strong></span>
+                                    <span class="fs-5"><strong>@currentBalance ENRG</strong></span>
+                                </div>
+                            </div>
+
+                            <!-- Dirección Destino -->
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    <i class="bi bi-person-fill me-2"></i>Dirección Destino
+                                </label>
+                                <input type="text" class="form-control @GetAddressValidationClass()" 
+                                       @bind="recipientAddress" 
+                                       @oninput="OnRecipientAddressInput"
+                                       placeholder="0x..." 
+                                       disabled="@isTransferring" />
+                                @if (!string.IsNullOrEmpty(recipientAddress))
+                                {
+                                    @if (IsValidAddress(recipientAddress))
+                                    {
+                                        <div class="form-text text-success">
+                                            <i class="bi bi-check-circle me-1"></i>Dirección válida
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="form-text text-danger">
+                                            <i class="bi bi-x-circle me-1"></i>Dirección inválida (debe tener formato 0x... con 42 caracteres)
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="form-text text-muted">
+                                        Dirección Ethereum del destinatario
+                                    </div>
+                                }
+                            </div>
+
+                            <!-- Cantidad -->
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    <i class="bi bi-coin me-2"></i>Cantidad (ENRG)
+                                </label>
+                                <input type="number" class="form-control @GetAmountValidationClass()" 
+                                       @bind="transferAmount" 
+                                       @oninput="OnAmountInput"
+                                       placeholder="Ej: 100" 
+                                       min="1" 
+                                       disabled="@isTransferring" />
+                                @if (transferAmount > 0)
+                                {
+                                    @if (transferAmount <= currentBalance)
+                                    {
+                                        <div class="form-text text-success">
+                                            <i class="bi bi-check-circle me-1"></i>Balance suficiente
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="form-text text-danger">
+                                            <i class="bi bi-x-circle me-1"></i>Balance insuficiente (tienes @currentBalance ENRG)
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="form-text text-muted">
+                                        Cantidad a transferir (1 ENRG = 1 kWh)
+                                    </div>
+                                }
+                            </div>
+
+                            <!-- Botón Transferir -->
+                            <div class="d-grid gap-2 mb-3">
+                                <button class="btn btn-primary btn-lg" 
+                                        @onclick="TransferEnergon" 
+                                        disabled="@(!CanTransfer())">
+                                    @if (isTransferring)
+                                    {
+                                        <span class="spinner-border spinner-border-sm me-2"></span>
+                                        <span>Procesando...</span>
+                                    }
+                                    else
+                                    {
+                                        <i class="bi bi-send-fill me-2"></i>
+                                        <span>Transferir @transferAmount ENRG</span>
+                                    }
+                                </button>
+                            </div>
+
+                            <!-- Mensajes -->
+                            @if (!string.IsNullOrEmpty(successTxHash))
+                            {
+                                <div class="alert alert-success">
+                                    <strong><i class="bi bi-check-circle me-2"></i>Transferencia Exitosa</strong>
+                                    <br />
+                                    <small>Hash: <code>@successTxHash</code></small>
+                                    <br />
+                                    <small class="text-muted">La transferencia se ha enviado correctamente. Espera a que se mine para ver el balance actualizado.</small>
+                                </div>
+                            }
+
+                            @if (!string.IsNullOrEmpty(errorMessage))
+                            {
+                                <div class="alert alert-danger">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>@errorMessage
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panel de Información -->
+        <div class="col-lg-4">
+            <div class="card bg-light shadow-sm">
+                <div class="card-body">
+                    <h6 class="card-title">
+                        <i class="bi bi-info-circle text-info me-2"></i>Información
+                    </h6>
+                    <ul class="small mb-3">
+                        <li>Transferencia directa entre participantes</li>
+                        <li>Sin comisiones entre usuarios</li>
+                        <li>Instantánea una vez minada</li>
+                        <li>Requiere confirmación en MetaMask</li>
+                    </ul>
+
+                    <h6 class="card-subtitle mb-2 mt-3">
+                        <i class="bi bi-shield-check text-success me-2"></i>Seguridad
+                    </h6>
+                    <ul class="small mb-0">
+                        <li>Verifica la dirección destino</li>
+                        <li>Las transferencias son irreversibles</li>
+                        <li>Confirma la cantidad antes de enviar</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Resumen de Transferencia -->
+            @if (transferAmount > 0 && IsValidAddress(recipientAddress))
+            {
+                <div class="card bg-primary bg-opacity-10 border-primary mt-3">
+                    <div class="card-body">
+                        <h6 class="card-title text-primary">
+                            <i class="bi bi-receipt me-2"></i>Resumen
+                        </h6>
+                        <table class="table table-sm mb-0">
+                            <tbody>
+                                <tr>
+                                    <th>De:</th>
+                                    <td><code class="small">@FormatAddress(connectedAddress)</code></td>
+                                </tr>
+                                <tr>
+                                    <th>Para:</th>
+                                    <td><code class="small">@FormatAddress(recipientAddress)</code></td>
+                                </tr>
+                                <tr>
+                                    <th>Cantidad:</th>
+                                    <td><strong>@transferAmount ENRG</strong></td>
+                                </tr>
+                                <tr>
+                                    <th>Comisión:</th>
+                                    <td><span class="text-success">0 ENRG</span></td>
+                                </tr>
+                                <tr class="table-active">
+                                    <th>Total:</th>
+                                    <td><strong>@transferAmount ENRG</strong></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private bool isWalletConnected = false;
+    private bool isRegistered = false;
+    private string connectedAddress = string.Empty;
+    private BigInteger currentBalance = 0;
+
+    private string recipientAddress = string.Empty;
+    private int transferAmount = 0;
+    private bool isTransferring = false;
+    private string successTxHash = string.Empty;
+    private string errorMessage = string.Empty;
+
+    private DotNetObjectReference<Transfer>? dotNetHelper;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadWalletStatus();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task LoadWalletStatus()
+    {
+        try
+        {
+            connectedAddress = await JS.InvokeAsync<string>("Web3Utils.getCurrentAccount");
+            
+            if (!string.IsNullOrEmpty(connectedAddress))
+            {
+                isWalletConnected = true;
+                var participantInfo = await MicrogridService.GetParticipantInfoAsync(connectedAddress);
+                isRegistered = participantInfo.IsRegistered;
+                currentBalance = await MicrogridService.GetEnergonBalanceAsync(connectedAddress);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not load wallet status");
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task TransferEnergon()
+    {
+        if (!CanTransfer())
+        {
+            errorMessage = "Verifica que los datos sean correctos";
+            return;
+        }
+
+        try
+        {
+            isTransferring = true;
+            errorMessage = string.Empty;
+            successTxHash = string.Empty;
+            StateHasChanged();
+
+            Logger.LogInformation("Transfiriendo {Amount} ENRG de {From} a {To}", 
+                transferAmount, connectedAddress, recipientAddress);
+
+            // Llamar a MetaMask para ejecutar transfer
+            var txHash = await JS.InvokeAsync<string>(
+                "Web3Utils.transferEnergon",
+                recipientAddress,
+                transferAmount
+            );
+
+            successTxHash = txHash;
+            Logger.LogInformation("Transferencia enviada: {TxHash}", txHash);
+
+            // Esperar 2 segundos para que se mine
+            await Task.Delay(2000);
+
+            // Actualizar balance
+            currentBalance = await MicrogridService.GetEnergonBalanceAsync(connectedAddress);
+
+            // Limpiar formulario
+            recipientAddress = string.Empty;
+            transferAmount = 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error transfiriendo ENRG");
+            errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isTransferring = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool CanTransfer()
+    {
+        return !isTransferring &&
+               IsValidAddress(recipientAddress) &&
+               transferAmount > 0 &&
+               transferAmount <= currentBalance &&
+               !string.Equals(recipientAddress, connectedAddress, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsValidAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return false;
+
+        return address.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && 
+               address.Length == 42;
+    }
+
+    private string GetAddressValidationClass()
+    {
+        if (string.IsNullOrEmpty(recipientAddress))
+            return string.Empty;
+
+        return IsValidAddress(recipientAddress) ? "is-valid" : "is-invalid";
+    }
+
+    private string GetAmountValidationClass()
+    {
+        if (transferAmount <= 0)
+            return string.Empty;
+
+        return transferAmount <= currentBalance ? "is-valid" : "is-invalid";
+    }
+
+    private void OnRecipientAddressInput(ChangeEventArgs e)
+    {
+        recipientAddress = e.Value?.ToString() ?? string.Empty;
+        errorMessage = string.Empty;
+        successTxHash = string.Empty;
+    }
+
+    private void OnAmountInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var amount))
+        {
+            transferAmount = amount;
+        }
+        else
+        {
+            transferAmount = 0;
+        }
+        errorMessage = string.Empty;
+        successTxHash = string.Empty;
+    }
+
+    private string FormatAddress(string address)
+    {
+        if (string.IsNullOrEmpty(address) || address.Length < 10)
+            return address;
+        
+        return $"{address[..6]}...{address[^4..]}";
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        dotNetHelper?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}
